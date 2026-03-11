@@ -9,6 +9,7 @@ import {
   File, 
   ChevronRight, 
   ChevronDown,
+  ChevronLeft,
   Send,
   Trash2,
   Copy,
@@ -20,7 +21,8 @@ import {
   TestTube,
   Settings,
   Bot,
-  User
+  User,
+  PanelLeftOpen,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -234,6 +236,9 @@ export default function DevAssistant() {
   const [input, setInput] = useState("")
   const [isTyping, setIsTyping] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const [repoSectionOpen, setRepoSectionOpen] = useState(true)
+  const [fileSectionOpen, setFileSectionOpen] = useState(true)
   
   const chatContainerRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -368,42 +373,63 @@ export default function DevAssistant() {
       {/* Left Sidebar */}
       <aside 
         className={cn(
-          "w-full lg:w-[30%] shrink-0 border-r border-[#30363d] flex flex-col",
+          "shrink-0 border-r border-[#30363d] flex flex-col",
           "lg:relative absolute inset-0 z-50 lg:z-auto",
-          "transition-transform duration-300 lg:translate-x-0",
+          "transition-[transform,width] duration-300",
+          // desktop: collapse to zero width
+          sidebarCollapsed ? "lg:w-0 lg:overflow-hidden lg:border-r-0" : "lg:w-[30%]",
+          // mobile: slide in/out
+          "w-full",
           sidebarOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0"
         )}
         style={{ backgroundColor: "#161b22" }}
       >
         {/* Logo */}
-        <div className="hidden lg:flex items-center gap-3 p-4 border-b border-[#30363d]">
-          <div className="p-2 rounded-lg bg-[#21262d]">
-            <Terminal className="h-5 w-5 text-[#58a6ff]" />
+        <div className="hidden lg:flex items-center justify-between p-4 border-b border-[#30363d]">
+          <div className="flex items-center gap-3">
+            <div className="p-2 rounded-lg bg-[#21262d]">
+              <Terminal className="h-5 w-5 text-[#58a6ff]" />
+            </div>
+            <span className="font-semibold text-lg text-[#e6edf3]">Dev Assistant</span>
           </div>
-          <span className="font-semibold text-lg text-[#e6edf3]">Dev Assistant</span>
+          <button
+            onClick={() => setSidebarCollapsed(true)}
+            className="text-[#484f58] hover:text-[#8b949e] transition-colors p-1 rounded"
+            title="Collapse sidebar"
+          >
+            <ChevronLeft className="h-4 w-4" />
+          </button>
         </div>
 
         {/* Repo URL Input */}
-        <div className="p-4 border-b border-[#30363d]">
-          <label className="block text-sm font-medium text-[#8b949e] mb-2">
-            GitHub Repository URL
-          </label>
-          <div className="flex gap-2">
-            <Input
-              value={repoUrl}
-              onChange={(e) => setRepoUrl(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && handleLoadRepo()}
-              placeholder="https://github.com/owner/repo"
-              className="flex-1 bg-[#0d1117] border-[#30363d] text-[#e6edf3] placeholder:text-[#484f58] focus-visible:ring-[#58a6ff]"
-            />
-            <Button
-              onClick={handleLoadRepo}
-              disabled={status === "loading"}
-              className="bg-[#238636] hover:bg-[#2ea043] text-white border-0"
-            >
-              {status === "loading" ? "..." : "Load"}
-            </Button>
-          </div>
+        <div className="border-b border-[#30363d]">
+          <button
+            onClick={() => setRepoSectionOpen(o => !o)}
+            className="w-full flex items-center justify-between px-4 py-2.5 text-sm font-medium text-[#8b949e] hover:text-[#e6edf3] hover:bg-[#21262d] transition-colors"
+          >
+            <span>Repository</span>
+            <ChevronDown className={cn("h-3.5 w-3.5 transition-transform duration-200", !repoSectionOpen && "-rotate-90")} />
+          </button>
+          {repoSectionOpen && (
+            <div className="px-4 pb-4">
+              <div className="flex gap-2">
+                <Input
+                  value={repoUrl}
+                  onChange={(e) => setRepoUrl(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && handleLoadRepo()}
+                  placeholder="https://github.com/owner/repo"
+                  className="flex-1 bg-[#0d1117] border-[#30363d] text-[#e6edf3] placeholder:text-[#484f58] focus-visible:ring-[#58a6ff]"
+                />
+                <Button
+                  onClick={handleLoadRepo}
+                  disabled={status === "loading"}
+                  className="bg-[#238636] hover:bg-[#2ea043] text-white border-0"
+                >
+                  {status === "loading" ? "..." : "Load"}
+                </Button>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Repo Info Card */}
@@ -436,23 +462,34 @@ export default function DevAssistant() {
         )}
 
         {/* File Tree */}
-        <div className="flex-1 overflow-y-auto p-4">
-          {!repoLoaded ? (
-            <div className="flex flex-col items-center justify-center h-full text-center">
-              <Github className="h-12 w-12 text-[#484f58] mb-4" />
-              <p className="text-[#8b949e]">Enter a repo URL to get started</p>
-            </div>
-          ) : (
-            <div>
-              {fileTree.map((node, i) => (
-                <FileTreeItem
-                  key={i}
-                  node={node}
-                  selectedFile={selectedFile}
-                  onSelect={setSelectedFile}
-                  onToggle={toggleFolder}
-                />
-              ))}
+        <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
+          <button
+            onClick={() => setFileSectionOpen(o => !o)}
+            className="shrink-0 w-full flex items-center justify-between px-4 py-2.5 text-sm font-medium text-[#8b949e] hover:text-[#e6edf3] hover:bg-[#21262d] transition-colors border-b border-[#30363d]"
+          >
+            <span>Files</span>
+            <ChevronDown className={cn("h-3.5 w-3.5 transition-transform duration-200", !fileSectionOpen && "-rotate-90")} />
+          </button>
+          {fileSectionOpen && (
+            <div className="flex-1 overflow-y-auto p-2">
+              {!repoLoaded ? (
+                <div className="flex flex-col items-center justify-center py-12 text-center">
+                  <Github className="h-12 w-12 text-[#484f58] mb-4" />
+                  <p className="text-[#8b949e]">Enter a repo URL to get started</p>
+                </div>
+              ) : (
+                <div>
+                  {fileTree.map((node, i) => (
+                    <FileTreeItem
+                      key={i}
+                      node={node}
+                      selectedFile={selectedFile}
+                      onSelect={setSelectedFile}
+                      onToggle={toggleFolder}
+                    />
+                  ))}
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -488,7 +525,17 @@ export default function DevAssistant() {
       <main className="flex-1 flex flex-col min-h-0" style={{ backgroundColor: "#0d1117" }}>
         {/* Mode Tabs & Clear Button */}
         <div className="flex items-center justify-between p-4 border-b border-[#30363d]">
-          <div className="flex gap-1 p-1 rounded-lg bg-[#161b22]">
+          <div className="flex items-center gap-2">
+            {sidebarCollapsed && (
+              <button
+                onClick={() => setSidebarCollapsed(false)}
+                className="hidden lg:flex items-center justify-center text-[#484f58] hover:text-[#8b949e] transition-colors mr-1 p-1 rounded"
+                title="Expand sidebar"
+              >
+                <PanelLeftOpen className="h-4 w-4" />
+              </button>
+            )}
+            <div className="flex gap-1 p-1 rounded-lg bg-[#161b22]">
             {(Object.keys(modeConfig) as Mode[]).map((m) => (
               <button
                 key={m}
@@ -505,6 +552,7 @@ export default function DevAssistant() {
                 <span className="hidden sm:inline">{modeConfig[m].label}</span>
               </button>
             ))}
+            </div>
           </div>
           <Button
             variant="ghost"
