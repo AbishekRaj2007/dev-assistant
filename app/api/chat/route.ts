@@ -9,26 +9,37 @@ You have been given context from the user's GitHub repository. Answer questions 
 reference specific files when relevant, and be concise but thorough.
 Format code snippets with proper markdown code blocks with language tags.`,
 
-  explain: `You are an expert software engineer. Explain code clearly.
-- Start with a one-line summary of what it does
-- Explain the "why" not just the "what"
-- Point out important patterns, algorithms, or design decisions
-- Mention potential issues or gotchas
-Use simple language, don't oversimplify.`,
+  explain: `You are an expert software engineer. Explain code clearly and thoroughly.
+Structure your explanation as follows:
+1. **Summary** — one sentence describing what this code does
+2. **How it works** — step-by-step walkthrough of the logic
+3. **Key patterns & decisions** — notable algorithms, design patterns, or architectural choices
+4. **Gotchas / notes** — edge cases, potential issues, or things to watch out for
+
+Use simple language. Always wrap code references in backticks. Use markdown headers and bullet points.`,
 
   test: `You are an expert software engineer specializing in testing.
-Generate comprehensive tests for the given code.
-- Detect the testing framework from context (Jest, Vitest, Pytest, etc.) and use it
-- Cover: happy path, edge cases, error cases, boundary conditions
-- Add a brief comment above each test describing what it tests
-- Output ONLY the test file content, no explanation outside code blocks
-- Include all necessary imports`,
+Generate a complete, runnable test file for the given code.
+
+Rules:
+- Detect the testing framework from the codebase context (Jest, Vitest, Pytest, Go test, etc.) and use it exclusively
+- Cover: happy path, edge cases, error/failure cases, boundary conditions
+- Add a one-line comment above each test describing what it verifies
+- Include ALL necessary imports at the top
+- Mock external dependencies (network, DB, filesystem) appropriately
+- Output ONLY the complete test file — no explanation text outside the code block
+- Use descriptive test names (e.g. "should return null when input is empty")`,
 
   generate: `You are an expert software engineer. Generate clean, production-quality code.
-- Match the coding style, patterns, and conventions of the existing codebase
-- Use the same libraries and frameworks already present
-- Handle errors appropriately
-- Output the code first, then a brief explanation of key decisions`,
+
+Rules:
+- Exactly match the coding style, patterns, naming conventions, and idioms of the existing codebase
+- Use only the libraries and frameworks already present — do not introduce new dependencies
+- Include proper error handling and TypeScript types (if the codebase uses TypeScript)
+- Output the complete implementation first in a properly tagged code block
+- After the code, add a brief "**Notes:**" section (3-5 bullets) explaining key decisions
+
+Do not add placeholder comments like "// TODO" or "// implement this".`,
 }
 
 function parseGitHubUrl(url: string): { owner: string; repo: string } | null {
@@ -86,11 +97,6 @@ export async function POST(req: NextRequest) {
     }
 
     const parsed = parseGitHubUrl(repoUrl?.trim() ?? "")
-    if (!parsed) {
-      return NextResponse.json({ error: "Invalid GitHub URL" }, { status: 400 })
-    }
-
-    const { owner, repo } = parsed
 
     const ghHeaders: Record<string, string> = {
       Accept: "application/vnd.github.v3+json",
@@ -100,28 +106,36 @@ export async function POST(req: NextRequest) {
       ghHeaders.Authorization = `token ${process.env.GITHUB_TOKEN}`
     }
 
-    // Build list of context files to fetch
-    const contextFilePaths = ["README.md", "package.json"]
-    if (selectedFile && !contextFilePaths.includes(selectedFile)) {
-      contextFilePaths.unshift(selectedFile) // prioritise selected file
+    let repoContext = ""
+
+    if (parsed) {
+      const { owner, repo } = parsed
+
+      // Build list of context files to fetch
+      const contextFilePaths = ["README.md", "package.json"]
+      if (selectedFile && !contextFilePaths.includes(selectedFile)) {
+        contextFilePaths.unshift(selectedFile) // prioritise selected file
+      }
+
+      const fetchedContents = await Promise.all(
+        contextFilePaths.map(async (f) => {
+          const content = await fetchFileContent(owner, repo, f, ghHeaders)
+          if (!content) return null
+          // Truncate large files to stay within token limits
+          const truncated = content.length > 8000 ? content.slice(0, 8000) + "\n... (truncated)" : content
+          return `=== ${f} ===\n${truncated}`
+        })
+      )
+
+      const contextBlock = fetchedContents.filter(Boolean).join("\n\n")
+      repoContext = contextBlock
+        ? `Repository: ${owner}/${repo}\n\n${contextBlock}`
+        : `Repository: ${owner}/${repo} (could not fetch file contents)`
     }
 
-    const fetchedContents = await Promise.all(
-      contextFilePaths.map(async (f) => {
-        const content = await fetchFileContent(owner, repo, f, ghHeaders)
-        if (!content) return null
-        // Truncate large files to stay within token limits
-        const truncated = content.length > 8000 ? content.slice(0, 8000) + "\n... (truncated)" : content
-        return `=== ${f} ===\n${truncated}`
-      })
-    )
-
-    const contextBlock = fetchedContents.filter(Boolean).join("\n\n")
-    const repoContext = contextBlock
-      ? `Repository: ${owner}/${repo}\n\n${contextBlock}`
-      : `Repository: ${owner}/${repo} (could not fetch file contents)`
-
-    const userMessage = `${repoContext}\n\n=== QUESTION ===\n${question}`
+    const userMessage = repoContext
+      ? `${repoContext}\n\n=== QUESTION ===\n${question}`
+      : question
 
     const groq = new Groq({ apiKey })
 
@@ -135,7 +149,7 @@ export async function POST(req: NextRequest) {
         { role: "user", content: userMessage },
       ],
       temperature: mode === "test" || mode === "generate" ? 0.2 : 0.5,
-      max_tokens: 2048,
+      max_tokens: mode === "test" || mode === "generate" ? 4096 : 2048,
     })
 
     const content =

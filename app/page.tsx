@@ -56,12 +56,46 @@ interface RepoInfo {
   description: string
 }
 
-const suggestionChips = [
-  "How does auth work?",
-  "Explain the main entry point",
-  "Generate tests for utils",
-  "What does this repo do?"
-]
+const modeSuggestions: Record<Mode, string[]> = {
+  ask: [
+    "How does auth work?",
+    "Explain the main entry point",
+    "What does this repo do?",
+    "Where is the API defined?",
+  ],
+  explain: [
+    "Explain the overall architecture",
+    "Walk me through the main entry point",
+    "What design patterns are used here?",
+    "Explain the data flow",
+  ],
+  test: [
+    "Generate tests for the selected file",
+    "What edge cases should I test?",
+    "Write tests for the API routes",
+    "How should I test async functions?",
+  ],
+  generate: [
+    "Generate a React component for a data table",
+    "Write a utility function for date formatting",
+    "Create a REST API endpoint for user CRUD",
+    "Generate a custom hook for fetching data",
+  ],
+}
+
+const modePlaceholders: Record<Mode, string> = {
+  ask: "Ask anything about the codebase...",
+  explain: "What would you like explained?",
+  test: "Describe what you want tests for...",
+  generate: "Describe the code you want to generate...",
+}
+
+const modeEmptyHeadings: Record<Mode, string> = {
+  ask: "Ask anything about your codebase",
+  explain: "Understand any code, file, or concept",
+  test: "Generate comprehensive tests",
+  generate: "Generate production-ready code",
+}
 
 const modeConfig: Record<Mode, { icon: React.ReactNode; label: string; color: string }> = {
   ask: { icon: <MessageSquare className="h-4 w-4" />, label: "Ask", color: "#58a6ff" },
@@ -296,10 +330,9 @@ export default function DevAssistant() {
     setFileTree(toggleNode(fileTree))
   }
 
-  const handleSend = async () => {
-    if (!input.trim()) return
-
-    const question = input
+  const handleSend = async (overrideInput?: string) => {
+    const question = overrideInput ?? input
+    if (!question.trim()) return
     const userMessage: Message = {
       id: Date.now().toString(),
       role: "user",
@@ -565,23 +598,71 @@ export default function DevAssistant() {
           </Button>
         </div>
 
-        {/* Chat Container */}
+        {/* Contextual Quick Action Bar */}
+        {selectedFile && (mode === "explain" || mode === "test") && (
+          <div className="px-4 py-2 border-b border-[#30363d] flex items-center justify-between" style={{ backgroundColor: "#161b22" }}>
+            <div className="flex items-center gap-2 text-sm text-[#8b949e]">
+              <File className="h-4 w-4 shrink-0" />
+              <span className="truncate max-w-[200px] font-mono text-xs">{selectedFile.split("/").pop()}</span>
+            </div>
+            <button
+              onClick={() =>
+                handleSend(
+                  mode === "explain"
+                    ? `Explain this file in detail: ${selectedFile}`
+                    : `Generate comprehensive tests for: ${selectedFile}`
+                )
+              }
+              disabled={isTyping}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-colors disabled:opacity-50 shrink-0 ml-3"
+              style={{
+                backgroundColor: modeConfig[mode].color + "22",
+                color: modeConfig[mode].color,
+                border: `1px solid ${modeConfig[mode].color}44`,
+              }}
+            >
+              {mode === "explain" ? (
+                <Search className="h-3.5 w-3.5" />
+              ) : (
+                <TestTube className="h-3.5 w-3.5" />
+              )}
+              {mode === "explain" ? "Explain this file" : "Generate tests"}
+            </button>
+          </div>
+        )}
         <div 
           ref={chatContainerRef}
           className="flex-1 overflow-y-auto p-4 space-y-4"
         >
           {messages.length === 0 ? (
             <div className="h-full flex flex-col items-center justify-center">
-              <Bot className="h-16 w-16 text-[#30363d] mb-4" />
-              <p className="text-[#8b949e] mb-6 text-center">
-                Start a conversation or pick a suggestion below
+              <div
+                className="h-16 w-16 rounded-2xl flex items-center justify-center mb-4"
+                style={{ backgroundColor: modeConfig[mode].color + "22" }}
+              >
+                <span style={{ color: modeConfig[mode].color }}>
+                  {modeConfig[mode].icon}
+                </span>
+              </div>
+              <p className="text-[#e6edf3] font-medium mb-1">{modeEmptyHeadings[mode]}</p>
+              <p className="text-[#8b949e] text-sm mb-6 text-center">
+                Pick a suggestion or type your own below
               </p>
               <div className="flex flex-wrap justify-center gap-2">
-                {suggestionChips.map((chip, i) => (
+                {modeSuggestions[mode].map((chip, i) => (
                   <button
                     key={i}
                     onClick={() => handleSuggestionClick(chip)}
-                    className="px-4 py-2 rounded-full border border-[#30363d] text-sm text-[#8b949e] hover:border-[#58a6ff] hover:text-[#58a6ff] transition-colors"
+                    className="px-4 py-2 rounded-full border text-sm transition-colors"
+                    style={{ borderColor: "#30363d", color: "#8b949e" }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.borderColor = modeConfig[mode].color
+                      e.currentTarget.style.color = modeConfig[mode].color
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.borderColor = "#30363d"
+                      e.currentTarget.style.color = "#8b949e"
+                    }}
                   >
                     {chip}
                   </button>
@@ -640,6 +721,37 @@ export default function DevAssistant() {
 
         {/* Input Bar */}
         <div className="p-4 border-t border-[#30363d]">
+          {mode === "generate" && (
+            <div className="flex items-center gap-2 mb-2 flex-wrap">
+              <span className="text-xs text-[#484f58]">Templates:</span>
+              {[
+                { label: "React component", prefix: "Generate a React component that " },
+                { label: "Utility function", prefix: "Write a utility function that " },
+                { label: "API endpoint", prefix: "Create an API endpoint that " },
+                { label: "Custom hook", prefix: "Generate a custom React hook that " },
+              ].map(({ label, prefix }) => (
+                <button
+                  key={label}
+                  onClick={() => {
+                    setInput(prefix)
+                    textareaRef.current?.focus()
+                  }}
+                  className="px-2.5 py-1 rounded text-xs border transition-colors"
+                  style={{ borderColor: "#30363d", color: "#8b949e" }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.borderColor = "#a371f7"
+                    e.currentTarget.style.color = "#a371f7"
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.borderColor = "#30363d"
+                    e.currentTarget.style.color = "#8b949e"
+                  }}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          )}
           <div className="flex items-end gap-3">
             <div className="flex-1 relative">
               <textarea
@@ -652,7 +764,7 @@ export default function DevAssistant() {
                     handleSend()
                   }
                 }}
-                placeholder={`Ask about the codebase...`}
+                placeholder={modePlaceholders[mode]}
                 rows={1}
                 className="w-full resize-none rounded-lg border border-[#30363d] bg-[#161b22] px-4 py-3 pr-12 text-[#e6edf3] placeholder:text-[#484f58] focus:outline-none focus:ring-2 focus:ring-[#58a6ff] focus:border-transparent"
                 style={{ minHeight: "48px", maxHeight: "120px" }}
@@ -662,7 +774,7 @@ export default function DevAssistant() {
               </div>
             </div>
             <Button
-              onClick={handleSend}
+              onClick={() => handleSend()}
               disabled={!input.trim() || isTyping}
               className="h-12 w-12 rounded-lg bg-[#58a6ff] hover:bg-[#79b8ff] text-white disabled:opacity-50"
             >
