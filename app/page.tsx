@@ -1,13 +1,13 @@
 "use client"
 
 import { useState, useRef, useEffect } from "react"
-import { 
-  Terminal, 
-  Github, 
-  Star, 
-  Folder, 
-  File, 
-  ChevronRight, 
+import {
+  Terminal,
+  Github,
+  Star,
+  Folder,
+  File,
+  ChevronRight,
   ChevronDown,
   ChevronLeft,
   Send,
@@ -23,9 +23,16 @@ import {
   Bot,
   User,
   PanelLeftOpen,
+  Download,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import {
+  ResizablePanelGroup,
+  ResizablePanel,
+  ResizableHandle,
+} from "@/components/ui/resizable"
+import { useIsMobile } from "@/hooks/use-mobile"
 import { cn } from "@/lib/utils"
 
 // Types
@@ -155,6 +162,34 @@ function MarkdownContent({ content }: { content: string }) {
           let processed = line.replace(/\*\*(.*?)\*\*/g, '<strong class="font-semibold text-[#e6edf3]">$1</strong>')
           // Inline code
           processed = processed.replace(/`([^`]+)`/g, '<code class="px-1.5 py-0.5 rounded text-sm font-mono" style="background-color: #1e2430">$1</code>')
+          // Headings — check ### before ## before # to avoid prefix collisions
+          if (line.trim().startsWith("### ")) {
+            return (
+              <h3
+                key={`${i}-${j}`}
+                className="text-sm font-semibold text-[#e6edf3] mt-3 mb-1"
+                dangerouslySetInnerHTML={{ __html: processed.replace(/^#+\s*/, "") }}
+              />
+            )
+          }
+          if (line.trim().startsWith("## ")) {
+            return (
+              <h2
+                key={`${i}-${j}`}
+                className="text-base font-semibold text-[#e6edf3] mt-4 mb-1"
+                dangerouslySetInnerHTML={{ __html: processed.replace(/^#+\s*/, "") }}
+              />
+            )
+          }
+          if (line.trim().startsWith("# ")) {
+            return (
+              <h1
+                key={`${i}-${j}`}
+                className="text-lg font-bold text-[#e6edf3] mt-4 mb-2"
+                dangerouslySetInnerHTML={{ __html: processed.replace(/^#+\s*/, "") }}
+              />
+            )
+          }
           // Bullet points
           if (line.trim().startsWith("- ")) {
             return (
@@ -258,12 +293,73 @@ function TypingIndicator() {
   )
 }
 
+// File viewer component (shows file content fetched from GitHub)
+function FileViewer({
+  filePath,
+  content,
+  language,
+  loading,
+  error,
+  onClose,
+}: {
+  filePath: string
+  content: string | null
+  language: string
+  loading: boolean
+  error: string | null
+  onClose: () => void
+}) {
+  const fileName = filePath.split("/").pop() ?? filePath
+
+  return (
+    <div className="flex flex-col h-full" style={{ backgroundColor: "#0d1117" }}>
+      {/* Header */}
+      <div
+        className="shrink-0 flex items-center justify-between px-4 py-2.5 border-b border-[#30363d]"
+        style={{ backgroundColor: "#161b22" }}
+      >
+        <div className="flex items-center gap-2 min-w-0">
+          <File className="h-4 w-4 shrink-0 text-[#8b949e]" />
+          <span className="text-sm font-mono font-medium text-[#e6edf3] truncate">{fileName}</span>
+          <span className="text-xs text-[#484f58] truncate hidden md:inline">— {filePath}</span>
+        </div>
+        <button
+          onClick={onClose}
+          className="shrink-0 ml-3 p-1 rounded text-[#484f58] hover:text-[#e6edf3] hover:bg-[#21262d] transition-colors"
+          title="Close file viewer"
+        >
+          <X className="h-4 w-4" />
+        </button>
+      </div>
+
+      {/* Content */}
+      <div className="flex-1 overflow-y-auto p-4">
+        {loading && (
+          <div className="flex items-center justify-center h-32 text-[#8b949e]">
+            <span className="text-sm animate-pulse">Loading {fileName}…</span>
+          </div>
+        )}
+        {error && !loading && (
+          <div className="flex items-center justify-center h-32">
+            <p className="text-sm text-[#f85149]">{error}</p>
+          </div>
+        )}
+        {content && !loading && <CodeBlock code={content} language={language} />}
+      </div>
+    </div>
+  )
+}
+
 export default function DevAssistant() {
   const [repoUrl, setRepoUrl] = useState("")
   const [repoLoaded, setRepoLoaded] = useState(false)
   const [repoInfo, setRepoInfo] = useState<RepoInfo | null>(null)
   const [fileTree, setFileTree] = useState<FileNode[]>([])
   const [selectedFile, setSelectedFile] = useState<string | null>(null)
+  const [fileContent, setFileContent] = useState<string | null>(null)
+  const [fileLanguage, setFileLanguage] = useState("plaintext")
+  const [fileLoading, setFileLoading] = useState(false)
+  const [fileError, setFileError] = useState<string | null>(null)
   const [status, setStatus] = useState<Status>("ready")
   const [mode, setMode] = useState<Mode>("ask")
   const [messages, setMessages] = useState<Message[]>([])
@@ -273,6 +369,8 @@ export default function DevAssistant() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [repoSectionOpen, setRepoSectionOpen] = useState(true)
   const [fileSectionOpen, setFileSectionOpen] = useState(true)
+
+  const isMobile = useIsMobile()
   
   const chatContainerRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -291,6 +389,46 @@ export default function DevAssistant() {
       textareaRef.current.style.height = Math.min(textareaRef.current.scrollHeight, 120) + "px"
     }
   }, [input])
+
+  // Fetch file content when a file is selected
+  useEffect(() => {
+    if (!selectedFile || !repoUrl.trim()) {
+      setFileContent(null)
+      setFileError(null)
+      return
+    }
+
+    let cancelled = false
+    setFileLoading(true)
+    setFileError(null)
+    setFileContent(null)
+
+    fetch("/api/file", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ repoUrl, filePath: selectedFile }),
+    })
+      .then((res) => res.json())
+      .then((data) => {
+        if (cancelled) return
+        if (data.error) {
+          setFileError(data.error)
+        } else {
+          setFileContent(data.content)
+          setFileLanguage(data.language)
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setFileError("Failed to load file")
+      })
+      .finally(() => {
+        if (!cancelled) setFileLoading(false)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [selectedFile, repoUrl])
 
   const handleLoadRepo = async () => {
     if (!repoUrl.trim()) return
@@ -376,6 +514,46 @@ export default function DevAssistant() {
 
   const clearChat = () => {
     setMessages([])
+  }
+
+  const exportChatAsMarkdown = () => {
+    if (messages.length === 0) return
+
+    const exportDate = new Date().toLocaleString("en-US", {
+      year: "numeric", month: "long", day: "numeric",
+      hour: "2-digit", minute: "2-digit",
+    })
+
+    const repoLine = repoInfo
+      ? `**Repository:** [${repoInfo.owner}/${repoInfo.name}](${repoUrl})\n\n`
+      : ""
+
+    const header =
+      `# Dev Assistant — Chat Export\n\n` +
+      `**Exported:** ${exportDate}  \n` +
+      `**Mode:** ${modeConfig[mode].label}  \n` +
+      repoLine +
+      `---\n\n`
+
+    const body = messages
+      .map((msg) => {
+        const roleLabel = msg.role === "user" ? "You" : "Assistant"
+        const timeStr = msg.timestamp.toLocaleTimeString("en-US", {
+          hour: "2-digit", minute: "2-digit", second: "2-digit",
+        })
+        return `### ${roleLabel}\n_${timeStr}_\n\n${msg.content}\n\n---\n`
+      })
+      .join("\n")
+
+    const blob = new Blob([header + body], { type: "text/markdown;charset=utf-8" })
+    const url = URL.createObjectURL(blob)
+    const anchor = document.createElement("a")
+    anchor.href = url
+    anchor.download = `dev-assistant-export-${Date.now()}.md`
+    document.body.appendChild(anchor)
+    anchor.click()
+    document.body.removeChild(anchor)
+    URL.revokeObjectURL(url)
   }
 
   const formatStars = (count: number) => {
@@ -587,201 +765,265 @@ export default function DevAssistant() {
             ))}
             </div>
           </div>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={clearChat}
-            className="text-[#8b949e] hover:text-[#f85149] hover:bg-[#21262d]"
-          >
-            <Trash2 className="h-4 w-4 mr-2" />
-            <span className="hidden sm:inline">Clear chat</span>
-          </Button>
-        </div>
-
-        {/* Contextual Quick Action Bar */}
-        {selectedFile && (mode === "explain" || mode === "test") && (
-          <div className="px-4 py-2 border-b border-[#30363d] flex items-center justify-between" style={{ backgroundColor: "#161b22" }}>
-            <div className="flex items-center gap-2 text-sm text-[#8b949e]">
-              <File className="h-4 w-4 shrink-0" />
-              <span className="truncate max-w-[200px] font-mono text-xs">{selectedFile.split("/").pop()}</span>
-            </div>
-            <button
-              onClick={() =>
-                handleSend(
-                  mode === "explain"
-                    ? `Explain this file in detail: ${selectedFile}`
-                    : `Generate comprehensive tests for: ${selectedFile}`
-                )
-              }
-              disabled={isTyping}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-colors disabled:opacity-50 shrink-0 ml-3"
-              style={{
-                backgroundColor: modeConfig[mode].color + "22",
-                color: modeConfig[mode].color,
-                border: `1px solid ${modeConfig[mode].color}44`,
-              }}
-            >
-              {mode === "explain" ? (
-                <Search className="h-3.5 w-3.5" />
-              ) : (
-                <TestTube className="h-3.5 w-3.5" />
-              )}
-              {mode === "explain" ? "Explain this file" : "Generate tests"}
-            </button>
-          </div>
-        )}
-        <div 
-          ref={chatContainerRef}
-          className="flex-1 overflow-y-auto p-4 space-y-4"
-        >
-          {messages.length === 0 ? (
-            <div className="h-full flex flex-col items-center justify-center">
-              <div
-                className="h-16 w-16 rounded-2xl flex items-center justify-center mb-4"
-                style={{ backgroundColor: modeConfig[mode].color + "22" }}
-              >
-                <span style={{ color: modeConfig[mode].color }}>
-                  {modeConfig[mode].icon}
-                </span>
-              </div>
-              <p className="text-[#e6edf3] font-medium mb-1">{modeEmptyHeadings[mode]}</p>
-              <p className="text-[#8b949e] text-sm mb-6 text-center">
-                Pick a suggestion or type your own below
-              </p>
-              <div className="flex flex-wrap justify-center gap-2">
-                {modeSuggestions[mode].map((chip, i) => (
-                  <button
-                    key={i}
-                    onClick={() => handleSuggestionClick(chip)}
-                    className="px-4 py-2 rounded-full border text-sm transition-colors"
-                    style={{ borderColor: "#30363d", color: "#8b949e" }}
-                    onMouseEnter={(e) => {
-                      e.currentTarget.style.borderColor = modeConfig[mode].color
-                      e.currentTarget.style.color = modeConfig[mode].color
-                    }}
-                    onMouseLeave={(e) => {
-                      e.currentTarget.style.borderColor = "#30363d"
-                      e.currentTarget.style.color = "#8b949e"
-                    }}
-                  >
-                    {chip}
-                  </button>
-                ))}
-              </div>
-            </div>
-          ) : (
-            <>
-              {messages.map((message) => (
-                <div
-                  key={message.id}
-                  className={cn(
-                    "flex gap-3 animate-in fade-in slide-in-from-bottom-2 duration-300",
-                    message.role === "user" ? "justify-end" : "justify-start"
-                  )}
-                >
-                  {message.role === "assistant" && (
-                    <div className="shrink-0 w-8 h-8 rounded-full bg-[#238636] flex items-center justify-center">
-                      <Bot className="h-4 w-4 text-white" />
-                    </div>
-                  )}
-                  <div
-                    className={cn(
-                      "max-w-[80%] rounded-lg px-4 py-3",
-                      message.role === "user"
-                        ? "bg-[#1f6feb] text-white"
-                        : "bg-[#161b22] border border-[#30363d]"
-                    )}
-                  >
-                    {message.role === "assistant" ? (
-                      <MarkdownContent content={message.content} />
-                    ) : (
-                      <p className="text-white">{message.content}</p>
-                    )}
-                  </div>
-                  {message.role === "user" && (
-                    <div className="shrink-0 w-8 h-8 rounded-full bg-[#21262d] flex items-center justify-center">
-                      <User className="h-4 w-4 text-[#8b949e]" />
-                    </div>
-                  )}
-                </div>
-              ))}
-              {isTyping && (
-                <div className="flex gap-3 animate-in fade-in duration-300">
-                  <div className="shrink-0 w-8 h-8 rounded-full bg-[#238636] flex items-center justify-center">
-                    <Bot className="h-4 w-4 text-white" />
-                  </div>
-                  <div className="bg-[#161b22] border border-[#30363d] rounded-lg px-4 py-3">
-                    <TypingIndicator />
-                  </div>
-                </div>
-              )}
-            </>
-          )}
-        </div>
-
-        {/* Input Bar */}
-        <div className="p-4 border-t border-[#30363d]">
-          {mode === "generate" && (
-            <div className="flex items-center gap-2 mb-2 flex-wrap">
-              <span className="text-xs text-[#484f58]">Templates:</span>
-              {[
-                { label: "React component", prefix: "Generate a React component that " },
-                { label: "Utility function", prefix: "Write a utility function that " },
-                { label: "API endpoint", prefix: "Create an API endpoint that " },
-                { label: "Custom hook", prefix: "Generate a custom React hook that " },
-              ].map(({ label, prefix }) => (
-                <button
-                  key={label}
-                  onClick={() => {
-                    setInput(prefix)
-                    textareaRef.current?.focus()
-                  }}
-                  className="px-2.5 py-1 rounded text-xs border transition-colors"
-                  style={{ borderColor: "#30363d", color: "#8b949e" }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.borderColor = "#a371f7"
-                    e.currentTarget.style.color = "#a371f7"
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.borderColor = "#30363d"
-                    e.currentTarget.style.color = "#8b949e"
-                  }}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-          )}
-          <div className="flex items-end gap-3">
-            <div className="flex-1 relative">
-              <textarea
-                ref={textareaRef}
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && !e.shiftKey) {
-                    e.preventDefault()
-                    handleSend()
-                  }
-                }}
-                placeholder={modePlaceholders[mode]}
-                rows={1}
-                className="w-full resize-none rounded-lg border border-[#30363d] bg-[#161b22] px-4 py-3 pr-12 text-[#e6edf3] placeholder:text-[#484f58] focus:outline-none focus:ring-2 focus:ring-[#58a6ff] focus:border-transparent"
-                style={{ minHeight: "48px", maxHeight: "120px" }}
-              />
-              <div className="absolute right-3 bottom-3 text-xs text-[#484f58]">
-                {modeConfig[mode].label}
-              </div>
-            </div>
+          <div className="flex items-center gap-1">
             <Button
-              onClick={() => handleSend()}
-              disabled={!input.trim() || isTyping}
-              className="h-12 w-12 rounded-lg bg-[#58a6ff] hover:bg-[#79b8ff] text-white disabled:opacity-50"
+              variant="ghost"
+              size="sm"
+              onClick={exportChatAsMarkdown}
+              disabled={messages.length === 0}
+              title="Export chat as Markdown"
+              className="text-[#8b949e] hover:text-[#58a6ff] hover:bg-[#21262d] disabled:opacity-40"
             >
-              <Send className="h-5 w-5" />
+              <Download className="h-4 w-4 mr-2" />
+              <span className="hidden sm:inline">Export</span>
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={clearChat}
+              className="text-[#8b949e] hover:text-[#f85149] hover:bg-[#21262d]"
+            >
+              <Trash2 className="h-4 w-4 mr-2" />
+              <span className="hidden sm:inline">Clear chat</span>
             </Button>
           </div>
         </div>
+
+        {/* Body: resizable file viewer + chat, or just chat */}
+        {(() => {
+          const showViewer = (fileContent !== null || fileLoading) && !!selectedFile
+
+          const quickActionBar = selectedFile && (mode === "explain" || mode === "test") && (
+            <div className="shrink-0 px-4 py-2 border-b border-[#30363d] flex items-center justify-between" style={{ backgroundColor: "#161b22" }}>
+              <div className="flex items-center gap-2 text-sm text-[#8b949e]">
+                <File className="h-4 w-4 shrink-0" />
+                <span className="truncate max-w-[200px] font-mono text-xs">{selectedFile.split("/").pop()}</span>
+              </div>
+              <button
+                onClick={() =>
+                  handleSend(
+                    mode === "explain"
+                      ? `Explain this file in detail: ${selectedFile}`
+                      : `Generate comprehensive tests for: ${selectedFile}`
+                  )
+                }
+                disabled={isTyping}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-colors disabled:opacity-50 shrink-0 ml-3"
+                style={{
+                  backgroundColor: modeConfig[mode].color + "22",
+                  color: modeConfig[mode].color,
+                  border: `1px solid ${modeConfig[mode].color}44`,
+                }}
+              >
+                {mode === "explain" ? (
+                  <Search className="h-3.5 w-3.5" />
+                ) : (
+                  <TestTube className="h-3.5 w-3.5" />
+                )}
+                {mode === "explain" ? "Explain this file" : "Generate tests"}
+              </button>
+            </div>
+          )
+
+          const chatMessages = (
+            <div ref={chatContainerRef} className="flex-1 overflow-y-auto p-4 space-y-4">
+              {messages.length === 0 ? (
+                <div className="h-full flex flex-col items-center justify-center">
+                  <div
+                    className="h-16 w-16 rounded-2xl flex items-center justify-center mb-4"
+                    style={{ backgroundColor: modeConfig[mode].color + "22" }}
+                  >
+                    <span style={{ color: modeConfig[mode].color }}>
+                      {modeConfig[mode].icon}
+                    </span>
+                  </div>
+                  <p className="text-[#e6edf3] font-medium mb-1">{modeEmptyHeadings[mode]}</p>
+                  <p className="text-[#8b949e] text-sm mb-6 text-center">
+                    Pick a suggestion or type your own below
+                  </p>
+                  <div className="flex flex-wrap justify-center gap-2">
+                    {modeSuggestions[mode].map((chip, i) => (
+                      <button
+                        key={i}
+                        onClick={() => handleSuggestionClick(chip)}
+                        className="px-4 py-2 rounded-full border text-sm transition-colors"
+                        style={{ borderColor: "#30363d", color: "#8b949e" }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.borderColor = modeConfig[mode].color
+                          e.currentTarget.style.color = modeConfig[mode].color
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.borderColor = "#30363d"
+                          e.currentTarget.style.color = "#8b949e"
+                        }}
+                      >
+                        {chip}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <>
+                  {messages.map((message) => (
+                    <div
+                      key={message.id}
+                      className={cn(
+                        "flex gap-3 animate-in fade-in slide-in-from-bottom-2 duration-300",
+                        message.role === "user" ? "justify-end" : "justify-start"
+                      )}
+                    >
+                      {message.role === "assistant" && (
+                        <div className="shrink-0 w-8 h-8 rounded-full bg-[#238636] flex items-center justify-center">
+                          <Bot className="h-4 w-4 text-white" />
+                        </div>
+                      )}
+                      <div
+                        className={cn(
+                          "max-w-[80%] rounded-lg px-4 py-3",
+                          message.role === "user"
+                            ? "bg-[#1f6feb] text-white"
+                            : "bg-[#161b22] border border-[#30363d]"
+                        )}
+                      >
+                        {message.role === "assistant" ? (
+                          <MarkdownContent content={message.content} />
+                        ) : (
+                          <p className="text-white">{message.content}</p>
+                        )}
+                      </div>
+                      {message.role === "user" && (
+                        <div className="shrink-0 w-8 h-8 rounded-full bg-[#21262d] flex items-center justify-center">
+                          <User className="h-4 w-4 text-[#8b949e]" />
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                  {isTyping && (
+                    <div className="flex gap-3 animate-in fade-in duration-300">
+                      <div className="shrink-0 w-8 h-8 rounded-full bg-[#238636] flex items-center justify-center">
+                        <Bot className="h-4 w-4 text-white" />
+                      </div>
+                      <div className="bg-[#161b22] border border-[#30363d] rounded-lg px-4 py-3">
+                        <TypingIndicator />
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          )
+
+          const inputBar = (
+            <div className="shrink-0 p-4 border-t border-[#30363d]">
+              {mode === "generate" && (
+                <div className="flex items-center gap-2 mb-2 flex-wrap">
+                  <span className="text-xs text-[#484f58]">Templates:</span>
+                  {[
+                    { label: "React component", prefix: "Generate a React component that " },
+                    { label: "Utility function", prefix: "Write a utility function that " },
+                    { label: "API endpoint", prefix: "Create an API endpoint that " },
+                    { label: "Custom hook", prefix: "Generate a custom React hook that " },
+                  ].map(({ label, prefix }) => (
+                    <button
+                      key={label}
+                      onClick={() => {
+                        setInput(prefix)
+                        textareaRef.current?.focus()
+                      }}
+                      className="px-2.5 py-1 rounded text-xs border transition-colors"
+                      style={{ borderColor: "#30363d", color: "#8b949e" }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.borderColor = "#a371f7"
+                        e.currentTarget.style.color = "#a371f7"
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.borderColor = "#30363d"
+                        e.currentTarget.style.color = "#8b949e"
+                      }}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              )}
+              <div className="flex items-end gap-3">
+                <div className="flex-1 relative">
+                  <textarea
+                    ref={textareaRef}
+                    value={input}
+                    onChange={(e) => setInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && !e.shiftKey) {
+                        e.preventDefault()
+                        handleSend()
+                      }
+                    }}
+                    placeholder={modePlaceholders[mode]}
+                    rows={1}
+                    className="w-full resize-none rounded-lg border border-[#30363d] bg-[#161b22] px-4 py-3 pr-12 text-[#e6edf3] placeholder:text-[#484f58] focus:outline-none focus:ring-2 focus:ring-[#58a6ff] focus:border-transparent"
+                    style={{ minHeight: "48px", maxHeight: "120px" }}
+                  />
+                  <div className="absolute right-3 bottom-3 text-xs text-[#484f58]">
+                    {modeConfig[mode].label}
+                  </div>
+                </div>
+                <Button
+                  onClick={() => handleSend()}
+                  disabled={!input.trim() || isTyping}
+                  className="h-12 w-12 rounded-lg bg-[#58a6ff] hover:bg-[#79b8ff] text-white disabled:opacity-50"
+                >
+                  <Send className="h-5 w-5" />
+                </Button>
+              </div>
+            </div>
+          )
+
+          const chatPanel = (
+            <div className="flex-1 flex flex-col min-h-0">
+              {quickActionBar}
+              {chatMessages}
+              {inputBar}
+            </div>
+          )
+
+          if (showViewer && !isMobile) {
+            return (
+              <ResizablePanelGroup direction="horizontal" className="flex-1 min-h-0">
+                <ResizablePanel defaultSize={40} minSize={20} maxSize={65}>
+                  <FileViewer
+                    filePath={selectedFile!}
+                    content={fileContent}
+                    language={fileLanguage}
+                    loading={fileLoading}
+                    error={fileError}
+                    onClose={() => setSelectedFile(null)}
+                  />
+                </ResizablePanel>
+                <ResizableHandle withHandle />
+                <ResizablePanel defaultSize={60} minSize={35} className="flex flex-col min-h-0">
+                  {chatPanel}
+                </ResizablePanel>
+              </ResizablePanelGroup>
+            )
+          }
+
+          if (showViewer && isMobile) {
+            return (
+              <div className="flex-1 flex flex-col min-h-0">
+                <FileViewer
+                  filePath={selectedFile!}
+                  content={fileContent}
+                  language={fileLanguage}
+                  loading={fileLoading}
+                  error={fileError}
+                  onClose={() => setSelectedFile(null)}
+                />
+              </div>
+            )
+          }
+
+          return chatPanel
+        })()}
       </main>
     </div>
   )
